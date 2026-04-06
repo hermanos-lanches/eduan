@@ -15,10 +15,21 @@ export const PERIOD_TO_HOURS: Record<string, number> = {
   '30d': 720,
 }
 
+// ── Zero-state (empty table) — never null after first load ───────────────────
+
+const EMPTY_KPIS: OverviewKPIs = {
+  execucoes_total:   0,
+  taxa_sucesso:      0,
+  throughput_per_h:  0,
+  latencia_media_ms: 0,
+  workflows_ativos:  0,
+  erros_criticos:    0,
+}
+
 // ── Hook return type ──────────────────────────────────────────────────────────
 
 export interface OverviewData {
-  kpis:         OverviewKPIs | null
+  kpis:         OverviewKPIs
   trendData:    TrendPoint[]
   latenciaData: LatenciaPoint[]
   alertas:      WorkflowError[]
@@ -30,7 +41,7 @@ export interface OverviewData {
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useOverviewData(period: string): OverviewData {
-  const [kpis,         setKpis]         = useState<OverviewKPIs | null>(null)
+  const [kpis,         setKpis]         = useState<OverviewKPIs>(EMPTY_KPIS)
   const [trendData,    setTrendData]    = useState<TrendPoint[]>([])
   const [latenciaData, setLatenciaData] = useState<LatenciaPoint[]>([])
   const [alertas,      setAlertas]      = useState<WorkflowError[]>([])
@@ -43,7 +54,7 @@ export function useOverviewData(period: string): OverviewData {
     setLoading(true)
     setError(null)
     try {
-      // All four queries run in parallel
+      // All four queries run in parallel — each returns safe empty values on empty table
       const [kpiData, trend, latencia, errors] = await Promise.all([
         fetchOverviewKPIs(periodHours),
         fetchTrendData(periodHours),
@@ -55,6 +66,7 @@ export function useOverviewData(period: string): OverviewData {
       setLatenciaData(latencia)
       setAlertas(errors)
     } catch (err) {
+      // Table does not exist or network error — keep current data, show banner
       const msg = err instanceof Error ? err.message : 'Erro ao carregar dados'
       console.error('[useOverviewData]', msg)
       setError(msg)

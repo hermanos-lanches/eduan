@@ -28,33 +28,50 @@ import { KpiCard } from '@/components/dashboard/kpi-card'
 import { CustoReceitaChart } from '@/components/dashboard/custo-receita-chart'
 import { useOverviewData } from '@/hooks/useOverviewData'
 import { cn } from '@/lib/utils'
-import type { AlertSeverity } from '@/lib/types'
+import type { AlertSeverity, TrendPoint, LatenciaPoint, WorkflowError } from '@/lib/types'
 
 // ── Filter options ────────────────────────────────────────────────────────────
 
-const PERIODOS  = [{ v: '24h', l: 'Últimas 24h'  },
+const PERIODOS  = [{ v: '24h', l: 'Últimas 24h'   },
                    { v: '7d',  l: 'Últimos 7 dias' },
                    { v: '30d', l: 'Últimos 30 dias' }]
 
 const CANAIS    = ['Todos', 'WhatsApp', 'Email', 'Instagram', 'Site']
 const CAMPANHAS = ['Todas', 'Q2 Leads', 'Retargeting', 'Outbound AI', 'Inbound SEO']
 
-// ── KPI card skeleton (loading state) ────────────────────────────────────────
+// ── Mock fallback data (shown when Supabase tables are empty) ─────────────────
 
-const KPI_SKELETON = Array.from({ length: 6 }, (_, i) => ({
-  label:      ['Execuções 24h','Taxa Sucesso','Throughput','Latência Média','Erros Críticos','Workflows Ativos'][i],
-  value:      '—',
-  trend:      0,
-  trendLabel: 'carregando…',
-  icon:       [
-    <PlayCircle  className="h-3.5 w-3.5" />,
-    <CheckCircle2 className="h-3.5 w-3.5" />,
-    <Gauge       className="h-3.5 w-3.5" />,
-    <Timer       className="h-3.5 w-3.5" />,
-    <XOctagon    className="h-3.5 w-3.5" />,
-    <LayoutGrid  className="h-3.5 w-3.5" />,
-  ][i],
+const MOCK_KPI = {
+  execucoes_total:   1284,
+  taxa_sucesso:      94.3,
+  throughput_per_h:  53.5,
+  latencia_media_ms: 1840,
+  workflows_ativos:  7,
+  erros_criticos:    2,
+}
+
+const MOCK_TREND: TrendPoint[] = [
+  '00','01','02','03','04','05','06','07','08','09','10','11',
+  '12','13','14','15','16','17','18','19','20','21','22','23',
+].map((h, i) => ({
+  hora:      `${h}:00`,
+  execucoes: 28 + Math.floor(Math.sin(i / 3) * 14 + i * 1.2),
+  erros:     Math.floor(Math.random() * 3),
 }))
+
+const MOCK_LATENCIA: LatenciaPoint[] = [
+  { workflow_name: 'enrich-lead',     avg_ms: 3820, total_exec: 214 },
+  { workflow_name: 'qualify-contact', avg_ms: 2410, total_exec: 389 },
+  { workflow_name: 'send-followup',   avg_ms: 1650, total_exec: 503 },
+  { workflow_name: 'score-lead',      avg_ms: 980,  total_exec: 178 },
+]
+
+const MOCK_ALERTAS: WorkflowError[] = [
+  { id: 'm1', workflow_name: 'n8n / cost-monitor',  execution_id: 'ex-001', error_message: 'Custo IA ultrapassou 90% do limite mensal',             severity: 'critical', created_at: new Date(Date.now() - 12 * 60000).toISOString() },
+  { id: 'm2', workflow_name: 'leads-pipeline',       execution_id: 'ex-002', error_message: 'Taxa de conversão abaixo de 20% nas últimas 6h',         severity: 'warning',  created_at: new Date(Date.now() - 65 * 60000).toISOString() },
+  { id: 'm3', workflow_name: 'n8n / enrich-lead',    execution_id: 'ex-003', error_message: 'Workflow "enrich-lead" com latência elevada (p95 > 8s)', severity: 'warning',  created_at: new Date(Date.now() - 130 * 60000).toISOString() },
+  { id: 'm4', workflow_name: 'sistema',              execution_id: 'ex-004', error_message: 'Novo modelo Haiku disponível — custo estimado 40% menor', severity: 'info',     created_at: new Date(Date.now() - 240 * 60000).toISOString() },
+]
 
 // ── Alert display constants ───────────────────────────────────────────────────
 
@@ -89,10 +106,7 @@ const AXIS_TICK = { fontSize: 10, fill: '#555555' }
 // ── FilterSelect ──────────────────────────────────────────────────────────────
 
 function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
+  label, value, options, onChange,
 }: {
   label: string
   value: string
@@ -112,13 +126,10 @@ function FilterSelect({
           className="
             appearance-none cursor-pointer rounded border border-[#2A2A2A]
             bg-[#181818] px-2.5 py-1 pr-6 text-[11px] text-[#CCCCCC]
-            outline-none transition-colors
-            hover:border-[#3A3A3A] focus:border-[#3A3A3A]
+            outline-none transition-colors hover:border-[#3A3A3A] focus:border-[#3A3A3A]
           "
         >
-          {opts.map((o) => (
-            <option key={o.v} value={o.v}>{o.l}</option>
-          ))}
+          {opts.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
         </select>
         <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#555555]" />
       </div>
@@ -135,8 +146,8 @@ function fmt(n: number | null | undefined, suffix = ''): string {
 
 function relativeTime(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (diff < 60)   return `há ${diff}s`
-  if (diff < 3600) return `há ${Math.floor(diff / 60)}min`
+  if (diff < 60)    return `há ${diff}s`
+  if (diff < 3600)  return `há ${Math.floor(diff / 60)}min`
   if (diff < 86400) return `há ${Math.floor(diff / 3600)}h`
   return `há ${Math.floor(diff / 86400)}d`
 }
@@ -148,85 +159,72 @@ export default function Overview() {
   const [canal,    setCanal]    = useState('Todos')
   const [campanha, setCampanha] = useState('Todas')
 
-  // suppress unused — canal/campanha will filter server-side in a future step
   void canal
   void campanha
 
   const { kpis, trendData, latenciaData, alertas, loading, error, refetch } =
     useOverviewData(periodo)
 
-  // ── Build KPI card definitions from live data ───────────────────────────────
+  // ── Mock fallback: activate when load is done, no error, tables empty ───────
+  const isMock = !loading && !error && kpis.execucoes_total === 0 && trendData.length === 0
 
-  const kpiCards = kpis
-    ? [
-        {
-          label:      'Execuções 24h',
-          value:      fmt(kpis.execucoes_total),
-          trend:      0,
-          trendLabel: `${fmt(kpis.throughput_per_h)} exec/h`,
-          icon:       <PlayCircle  className="h-3.5 w-3.5" />,
-        },
-        {
-          label:      'Taxa de Sucesso',
-          value:      fmt(kpis.taxa_sucesso, '%'),
-          trend:      0,
-          trendLabel: `${fmt(kpis.execucoes_total)} execuções`,
-          icon:       <CheckCircle2 className="h-3.5 w-3.5" />,
-        },
-        {
-          label:      'Throughput',
-          value:      fmt(kpis.throughput_per_h, ' exec/h'),
-          trend:      0,
-          trendLabel: `no período selecionado`,
-          icon:       <Gauge className="h-3.5 w-3.5" />,
-        },
-        {
-          label:      'Latência Média',
-          value:      fmt(kpis.latencia_media_ms, ' ms'),
-          trend:      0,
-          trendLabel: `avg duration_ms`,
-          icon:       <Timer className="h-3.5 w-3.5" />,
-        },
-        {
-          label:      'Erros Críticos',
-          value:      fmt(kpis.erros_criticos),
-          trend:      0,
-          trendLabel: `severity = critical`,
-          icon:       <XOctagon className="h-3.5 w-3.5" />,
-          alert:      kpis.erros_criticos > 0,
-        },
-        {
-          label:      'Workflows Ativos',
-          value:      fmt(kpis.workflows_ativos),
-          trend:      0,
-          trendLabel: `distinct no período`,
-          icon:       <LayoutGrid className="h-3.5 w-3.5" />,
-        },
+  const activeKpis      = isMock ? MOCK_KPI       : kpis
+  const activeTrend     = isMock ? MOCK_TREND      : trendData
+  const activeLatencia  = isMock ? MOCK_LATENCIA   : latenciaData
+  const activeAlertas   = isMock ? MOCK_ALERTAS    : alertas
+
+  // ── Build KPI cards ─────────────────────────────────────────────────────────
+  const kpiCards = loading
+    ? Array.from({ length: 6 }, (_, i) => ({
+        label:      ['Execuções','Taxa Sucesso','Throughput','Latência Média','Erros Críticos','Workflows Ativos'][i],
+        value:      '—',
+        trend:      0,
+        trendLabel: 'carregando…',
+        icon:       [
+          <PlayCircle className="h-3.5 w-3.5" />,
+          <CheckCircle2 className="h-3.5 w-3.5" />,
+          <Gauge className="h-3.5 w-3.5" />,
+          <Timer className="h-3.5 w-3.5" />,
+          <XOctagon className="h-3.5 w-3.5" />,
+          <LayoutGrid className="h-3.5 w-3.5" />,
+        ][i],
+      }))
+    : [
+        { label: 'Execuções',       value: fmt(activeKpis.execucoes_total),         trend: 0, trendLabel: `${fmt(activeKpis.throughput_per_h)} exec/h`,      icon: <PlayCircle   className="h-3.5 w-3.5" /> },
+        { label: 'Taxa de Sucesso', value: fmt(activeKpis.taxa_sucesso, '%'),         trend: 0, trendLabel: `${fmt(activeKpis.execucoes_total)} execuções`,    icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
+        { label: 'Throughput',      value: fmt(activeKpis.throughput_per_h, '/h'),    trend: 0, trendLabel: 'execuções por hora',                              icon: <Gauge        className="h-3.5 w-3.5" /> },
+        { label: 'Latência Média',  value: fmt(activeKpis.latencia_media_ms, ' ms'),  trend: 0, trendLabel: 'avg duration_ms',                                 icon: <Timer        className="h-3.5 w-3.5" /> },
+        { label: 'Erros Críticos',  value: fmt(activeKpis.erros_criticos),            trend: 0, trendLabel: 'severity = critical',   alert: activeKpis.erros_criticos > 0, icon: <XOctagon className="h-3.5 w-3.5" /> },
+        { label: 'Workflows Ativos',value: fmt(activeKpis.workflows_ativos),          trend: 0, trendLabel: 'distinct no período',                             icon: <LayoutGrid   className="h-3.5 w-3.5" /> },
       ]
-    : KPI_SKELETON
 
-  const activeAlerts = alertas.filter((a) => a.severity !== 'info').length
-  const trendInterval = periodo === '30d' ? 4 : 0
+  const activeAlertCount = activeAlertas.filter((a) => a.severity !== 'info').length
+  const trendInterval    = periodo === '30d' ? 4 : 0
 
   return (
     <div className="min-h-screen bg-[#111111] text-[#E5E5E5]">
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* ── Header ───────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-10 border-b border-[#1E1E1E] bg-[#111111]">
         <div className="flex items-center justify-between px-6 py-3">
 
-          {/* Brand */}
           <div className="flex items-center gap-4">
             <div>
-              <p className="text-[13px] font-semibold leading-tight tracking-tight text-[#E5E5E5]">
-                AI Performance Dashboard
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-[13px] font-semibold leading-tight tracking-tight text-[#E5E5E5]">
+                  AI Performance Dashboard
+                </p>
+                {isMock && (
+                  <span className="rounded border border-amber-800/50 bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+                    DEMO
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-[#555555]">Keterflow · Overview</p>
             </div>
             <div className="h-6 w-px bg-[#2A2A2A]" />
           </div>
 
-          {/* Filters + refresh */}
           <div className="flex items-center gap-5">
             <FilterSelect label="Período"  value={periodo}  options={PERIODOS}  onChange={setPeriodo}  />
             <FilterSelect label="Canal"    value={canal}    options={CANAIS}    onChange={setCanal}    />
@@ -244,7 +242,7 @@ export default function Overview() {
         </div>
       </header>
 
-      {/* ── Error banner ───────────────────────────────────────────────────── */}
+      {/* ── Error banner ─────────────────────────────────────────────────────── */}
       {error && (
         <div className="border-b border-red-900/40 bg-red-950/30 px-6 py-2">
           <p className="text-[11px] text-red-400">
@@ -253,7 +251,16 @@ export default function Overview() {
         </div>
       )}
 
-      {/* ── Main ───────────────────────────────────────────────────────────── */}
+      {/* ── Mock notice ──────────────────────────────────────────────────────── */}
+      {isMock && (
+        <div className="border-b border-amber-900/30 bg-amber-950/20 px-6 py-1.5">
+          <p className="text-[11px] text-amber-600">
+            Tabelas vazias — exibindo dados de demonstração. Insira registros em <code className="font-mono">workflow_metrics</code> para ver dados reais.
+          </p>
+        </div>
+      )}
+
+      {/* ── Main ─────────────────────────────────────────────────────────────── */}
       <main className="space-y-4 p-6">
 
         {/* 1 ── KPI row */}
@@ -266,17 +273,13 @@ export default function Overview() {
         {/* 2 ── Charts row */}
         <section className="grid grid-cols-5 gap-3">
 
-          {/* Execuções & Erros — 3/5 */}
           <Card className="col-span-3">
             <CardHeader>
               <CardTitle>Execuções & Erros — tendência</CardTitle>
             </CardHeader>
             <CardContent className="pt-2 pb-3">
               <ResponsiveContainer width="100%" height={228}>
-                <AreaChart
-                  data={trendData}
-                  margin={{ top: 4, right: 4, left: -16, bottom: 0 }}
-                >
+                <AreaChart data={activeTrend} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gExec" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%"  stopColor="#4A8FD4" stopOpacity={0.15} />
@@ -288,8 +291,8 @@ export default function Overview() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1E1E1E" />
-                  <XAxis dataKey="hora"      tick={AXIS_TICK} tickLine={false} axisLine={false} interval={trendInterval} />
-                  <YAxis                     tick={AXIS_TICK} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="hora" tick={AXIS_TICK} tickLine={false} axisLine={false} interval={trendInterval} />
+                  <YAxis                tick={AXIS_TICK} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ stroke: '#333', strokeWidth: 1 }} />
                   <Legend iconSize={7} iconType="circle" wrapperStyle={{ fontSize: 11, color: '#777', paddingTop: 8 }} />
                   <Area type="monotone" dataKey="execucoes" name="Execuções" stroke="#4A8FD4" strokeWidth={1.5} fill="url(#gExec)"  dot={false} activeDot={{ r: 3, fill: '#4A8FD4' }} />
@@ -299,9 +302,8 @@ export default function Overview() {
             </CardContent>
           </Card>
 
-          {/* Latência por workflow — 2/5 */}
           <div className="col-span-2">
-            <CustoReceitaChart data={latenciaData} loading={loading} />
+            <CustoReceitaChart data={activeLatencia} loading={loading} />
           </div>
 
         </section>
@@ -313,30 +315,27 @@ export default function Overview() {
               <div className="flex items-center justify-between">
                 <CardTitle>Alertas ativos</CardTitle>
                 <span className="text-[11px] text-[#555555]">
-                  {loading ? '…' : `${activeAlerts} críticos/alertas · ${alertas.length} total`}
+                  {loading
+                    ? '…'
+                    : `${activeAlertCount} críticos/alertas · ${activeAlertas.length} total`}
                 </span>
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              {alertas.length === 0 && !loading && (
+              {activeAlertas.length === 0 && !loading && (
                 <p className="px-4 py-3 text-[12px] text-[#555555]">
                   Nenhum alerta no período selecionado.
                 </p>
               )}
               <div className="divide-y divide-[#1A1A1A]">
-                {alertas.map((alert) => (
+                {activeAlertas.map((alert) => (
                   <div
                     key={alert.id}
-                    className={cn(
-                      'flex items-start gap-3 py-2.5 pr-4 pl-3',
-                      ALERT_BORDER[alert.severity],
-                    )}
+                    className={cn('flex items-start gap-3 py-2.5 pr-4 pl-3', ALERT_BORDER[alert.severity])}
                   >
                     {ALERT_ICON[alert.severity]}
                     <div className="min-w-0 flex-1">
-                      <p className="text-[13px] leading-snug text-[#E0E0E0]">
-                        {alert.error_message}
-                      </p>
+                      <p className="text-[13px] leading-snug text-[#E0E0E0]">{alert.error_message}</p>
                       <p className="mt-0.5 text-[11px] text-[#555555]">
                         {alert.workflow_name}
                         <span className="mx-1.5 text-[#333333]">·</span>
